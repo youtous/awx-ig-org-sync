@@ -54,6 +54,47 @@ def _controller_get_all_entities(
 
     return entities
 
+def _controller_get_all_users_entity(
+    entity_name,
+    id,
+    role,
+    controller_url,
+    controller_headers={},
+    page_size=200,
+    validate_certs=True,
+):
+    """
+    Get all users of an entity with a specific role.
+    :param entity_name:
+    :param id
+    :param role
+    :param controller_url:
+    :param controller_headers:
+    :param page_size:
+    :param validate_certs:
+    :return: entities
+    """
+
+    entities = []
+    url = f"{controller_url}/api/v2/{entity_name}/{id}/{role}/?page_size={page_size}"
+
+    while True:
+        logging.debug(f"Requesting GET '{url}'")
+        response = requests.get(url, headers=controller_headers, verify=validate_certs)
+
+        response.raise_for_status()
+        logging.debug(f"Request content: {response.content}")
+        response = response.json()
+
+        entities.extend(response["results"])
+
+        if response["next"] is None:
+            break
+        else:
+            url = f"{controller_url}{response['next']}"
+
+    return entities
+
 
 def _controller_find_first_entity(
     entity_name, query, controller_url, controller_headers, validate_certs=True
@@ -120,7 +161,7 @@ def _controller_create_entity(
 @click.option(
     "--role-from-org-to-allow",
     help="List of Organization roles to add to the Instance Group Team with use permission, coma (,) separated.",
-    default="admin,",
+    default="admins",
 )
 @click.option(
     "--skip-list-instance-groups",
@@ -141,6 +182,7 @@ def sync(
     controller_url,
     team_prefix,
     parent_organization,
+    role_from_org_to_allow,
     skip_list_instance_groups,
     controller_oauth2_token,
     ignore_certs_validation,
@@ -212,7 +254,7 @@ def sync(
                     controller_headers=controller_headers,
                     validate_certs=verify_certs,
                 )
-            team_map[instance_group['name']] = team
+            team_map[team_name] = team
 
     # list all organizations for each organizations, add the admins and inventory admins to the team of each Instance
     # Group referenced by the Organization
@@ -223,10 +265,87 @@ def sync(
         validate_certs=verify_certs,
     )
 
+    role_from_org_to_allow = role_from_org_to_allow.split(',')
+    allowed_users_per_ig = {}
     for organization in organizations:
-        print(organization)
+        for role in role_from_org_to_allow:
+            logging.info(f"Processing role={role} from org={organization}")
 
-    # /!\ ensure that teams of instances groups does not contains other people than the one referenced
+            org_id = organization["id"]
+
+            role_users = _controller_get_all_entities(
+                entity_name=f"organizations/{org_id}/{role}",
+                controller_url=controller_url,
+                controller_headers=controller_headers,
+                validate_certs=verify_certs,
+            )
+
+            org_instance_groups = _controller_get_all_entities(
+                entity_name=f"organizations/{org_id}/instance_groups",
+                controller_url=controller_url,
+                controller_headers=controller_headers,
+                validate_certs=verify_certs,
+            )
+
+            # add role in each instance group
+            for team_name, team_object in team_map.items():
+                logging.info(f"Adding {len(role_users)} {role} from {organization['name']} to team={team_name}")
+                
+                if team_name not in allowed_users_per_ig:
+                    allowed_users_per_ig[team_name] = {"id": team_object['id'], "users": []}
+                
+                allowed_users_per_ig[team_name]["users"].extend(map(lambda user: user['id'], role_users))
+
+    # Perform reconcilliation of current teams state and target
+    for team_name, allowed_user_list in team_map.items():
+        # make sure the team has USE permission on the target Instance Group
+
+        team_user_list = _controller_get_all_entities(
+            entity_name=f"teams/{allowed_users_per_ig[team_name]['id']}/users",
+            controller_url=controller_url,
+            controller_headers=controller_headers,
+            validate_certs=verify_certs,
+        )
+
+        target_list = set(allowed_users_per_ig[team_name]["users"])
+        current_user_list_id = set()
+
+        # retrieve Member role id for the team
+        team_object_roles = _controller_get_all_entities(
+            entity_name=f"teams/{allowed_users_per_ig[team_name]['id']}/object_roles",
+            controller_url=controller_url,
+            controller_headers=controller_headers,
+            validate_certs=verify_certs,
+        )
+        member_role_id = None
+        for role in team_object_roles:
+            if role["name"] == "Member":
+                member_role_id = role['id']
+                break
+
+        # remove users not to be added
+        for team_user in team_user_list:
+            if team_user['id'] not in target_list:
+                logging.info(f"Removing {team_user['username']}#{team_user['id']} from team={team_name}")
+                # TODO : implement
+            else:
+                current_user_list_id.add(team_user['id'])
+
+        # ensure target list is implemented
+        for user_id in target_list:
+            if user_id not in current_user_list_id:
+                logging.info(f"Adding missing user#{user_id} to team={team_name}")
+                add_result = _controller_create_entity(
+                    entity_name=f"users/{user_id}/roles",
+                    data={"id": member_role_id}
+                    controller_url=controller_url,
+                    controller_headers=controller_headers,
+                    validate_certs=verify_certs,
+                )
+                logging.info(f"Adding user#{user_id} to team={team_name} result: {add_result}")
+
+
+        logging.info(f"Synchronization of Instance Groups teams completed.")
 
 
 if __name__ == "__main__":
