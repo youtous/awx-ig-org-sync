@@ -54,6 +54,7 @@ def _controller_get_all_entities(
 
     return entities
 
+
 def _controller_get_all_users_entity(
     entity_name,
     id,
@@ -141,6 +142,27 @@ def _controller_create_entity(
     response = requests.post(
         url, data=json.dumps(data), headers=controller_headers, verify=validate_certs
     )
+
+    response.raise_for_status()
+    return response
+
+
+def _controller_delete_entity(
+    entity_name, controller_url, controller_headers, validate_certs=True
+):
+    """
+    Delete an entity.
+    :param entity_name:
+    :param controller_url:
+    :param controller_headers:
+    :param validate_certs:
+    :return:
+    """
+
+    url = f"{controller_url}/api/v2/{entity_name}/"
+
+    logging.debug(f"Requesting DELETE '{url}'")
+    response = requests.delete(url, headers=controller_headers, verify=validate_certs)
 
     response.raise_for_status()
     return response
@@ -265,7 +287,9 @@ def sync(
         validate_certs=verify_certs,
     )
 
-    role_from_org_to_allow = role_from_org_to_allow.split(',')
+    # TODO : add some async requests block for each org
+
+    role_from_org_to_allow = role_from_org_to_allow.split(",")
     allowed_users_per_ig = {}
     for organization in organizations:
         for role in role_from_org_to_allow:
@@ -289,12 +313,21 @@ def sync(
 
             # add role in each instance group
             for team_name, team_object in team_map.items():
-                logging.info(f"Adding {len(role_users)} {role} from {organization['name']} to team={team_name}")
-                
+                logging.info(
+                    f"Adding {len(role_users)} {role} from {organization['name']} to team={team_name}"
+                )
+
                 if team_name not in allowed_users_per_ig:
-                    allowed_users_per_ig[team_name] = {"id": team_object['id'], "users": []}
-                
-                allowed_users_per_ig[team_name]["users"].extend(map(lambda user: user['id'], role_users))
+                    allowed_users_per_ig[team_name] = {
+                        "id": team_object["id"],
+                        "users": [],
+                    }
+
+                allowed_users_per_ig[team_name]["users"].extend(
+                    map(lambda user: user["id"], role_users)
+                )
+
+    # TODO : add some async for teams
 
     # Perform reconcilliation of current teams state and target
     for team_name, allowed_user_list in team_map.items():
@@ -320,16 +353,29 @@ def sync(
         member_role_id = None
         for role in team_object_roles:
             if role["name"] == "Member":
-                member_role_id = role['id']
+                member_role_id = role["id"]
                 break
+
+        # TODO : async for users
 
         # remove users not to be added
         for team_user in team_user_list:
-            if team_user['id'] not in target_list:
-                logging.info(f"Removing {team_user['username']}#{team_user['id']} from team={team_name}")
-                # TODO : implement
+            if team_user["id"] not in target_list:
+                logging.info(
+                    f"Removing {team_user['username']}#{team_user['id']} from team={team_name}"
+                )
+                remove_result = _controller_create_entity(
+                    entity_name=f"users/{user_id}/roles",
+                    data={"id": member_role_id, "disassociate": True},
+                    controller_url=controller_url,
+                    controller_headers=controller_headers,
+                    validate_certs=verify_certs,
+                )
+                logging.info(
+                    f"Removing user#{user_id} from team={team_name} result: {remove_result}"
+                )
             else:
-                current_user_list_id.add(team_user['id'])
+                current_user_list_id.add(team_user["id"])
 
         # ensure target list is implemented
         for user_id in target_list:
@@ -337,16 +383,19 @@ def sync(
                 logging.info(f"Adding missing user#{user_id} to team={team_name}")
                 add_result = _controller_create_entity(
                     entity_name=f"users/{user_id}/roles",
-                    data={"id": member_role_id}
+                    data={"id": member_role_id},
                     controller_url=controller_url,
                     controller_headers=controller_headers,
                     validate_certs=verify_certs,
                 )
-                logging.info(f"Adding user#{user_id} to team={team_name} result: {add_result}")
-
+                logging.info(
+                    f"Adding user#{user_id} to team={team_name} result: {add_result}"
+                )
 
         logging.info(f"Synchronization of Instance Groups teams completed.")
 
 
 if __name__ == "__main__":
+    # TODO : add an option to remove all users with USE permissions before appliying model
+    # /api/v2/roles/{id}/users/ List Users for a Role
     sync()
