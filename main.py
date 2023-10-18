@@ -3,9 +3,6 @@ Synchronize awx Instance Groups USE permissions using dedicated Teams.
 Users that are Admin or Inventory Admin of an Organization will obtain full USE on the Instance Groups listed by the Organization.
 """
 
-import aiohttp
-import asyncio
-
 import click
 import logging
 import os
@@ -195,6 +192,12 @@ def _controller_delete_entity(
     help="The awx controller oauth2 token with System Administrator privilege.",
 )
 @click.option(
+    "--cleanup-use-role",
+    default=True,
+    is_flag=True,
+    help="If enabled, all use of instance group not managed by the team will be removed.",
+)
+@click.option(
     "--ignore-certs-validation",
     default=False,
     is_flag=True,
@@ -207,6 +210,7 @@ def sync(
     role_from_org_to_allow,
     skip_list_instance_groups,
     controller_oauth2_token,
+    cleanup_use_role,
     ignore_certs_validation,
 ):
     """Perform the mapping of permissions base on Organizations."""
@@ -243,8 +247,53 @@ def sync(
     team_map = {}
     for instance_group in instance_groups:
         if instance_group["name"] not in skip_list_instance_group:
+            # retrieve the USE role for the instance group
+            ig_object_roles = _controller_get_all_entities(
+                entity_name=f"instance_groups/{instance_group['id']}/object_roles",
+                controller_url=controller_url,
+                controller_headers=controller_headers,
+                validate_certs=verify_certs,
+            )
+            ig_use_role_id = None
+            for role in ig_object_roles:
+                if role["name"] == "Use":
+                    ig_use_role_id = role["id"]
+                    break
+
             team_name = f"{team_prefix}{instance_group['name']}"
             logging.info(f"Checking status of team={team_name}")
+
+            if cleanup_use_role:
+                logging.info(
+                    f"Removing manual USE role from users on Instance Group={instance_group['name']}"
+                )
+                users_with_use_role = _controller_get_all_entities(
+                    entity_name=f"roles/{ig_use_role_id}/users",
+                    controller_url=controller_url,
+                    controller_headers=controller_headers,
+                    validate_certs=verify_certs,
+                )
+
+                logging.info(
+                    f"Found {len(users_with_use_role)} users with USE role on Instance Group={instance_group['name']}"
+                )
+
+                for user_to_remove_from_ig in users_with_use_role:
+                    logging.info(
+                        f"Removing USE role for {user_to_remove_from_ig['username']} in Instance Group={instance_group['name']}"
+                    )
+
+                    remove_result = _controller_create_entity(
+                        entity_name=f"users/{user_to_remove_from_ig['id']}/roles",
+                        data={"id": ig_use_role_id, disassociate: True},
+                        controller_url=controller_url,
+                        controller_headers=controller_headers,
+                        validate_certs=verify_certs,
+                    )
+
+                    logging.info(
+                        f"Removing USE role for {user_to_remove_from_ig['username']} on Instance Group={instance_group['name']} result: {remove_result}"
+                    )
 
             team = _controller_find_first_entity(
                 entity_name="teams",
@@ -276,6 +325,22 @@ def sync(
                     controller_headers=controller_headers,
                     validate_certs=verify_certs,
                 )
+
+            logging.info(
+                f"Ensure team={team_name} has USE role on={instance_group['name']}"
+            )
+            add_result = _controller_create_entity(
+                entity_name=f"teams/{team['id']}/roles",
+                data={"id": ig_use_role_id},
+                controller_url=controller_url,
+                controller_headers=controller_headers,
+                validate_certs=verify_certs,
+            )
+
+            logging.info(
+                f"Add team={team_name} USE role on={instance_group['name']} result: {add_result}"
+            )
+
             team_map[team_name] = team
 
     # list all organizations for each organizations, add the admins and inventory admins to the team of each Instance
@@ -286,8 +351,6 @@ def sync(
         controller_headers=controller_headers,
         validate_certs=verify_certs,
     )
-
-    # TODO : add some async requests block for each org
 
     role_from_org_to_allow = role_from_org_to_allow.split(",")
     allowed_users_per_ig = {}
@@ -327,7 +390,7 @@ def sync(
                     map(lambda user: user["id"], role_users)
                 )
 
-    # TODO : add some async for teams
+    logging.info("Applying needed changes...")
 
     # Perform reconcilliation of current teams state and target
     for team_name, allowed_user_list in team_map.items():
@@ -355,8 +418,6 @@ def sync(
             if role["name"] == "Member":
                 member_role_id = role["id"]
                 break
-
-        # TODO : async for users
 
         # remove users not to be added
         for team_user in team_user_list:
@@ -396,6 +457,5 @@ def sync(
 
 
 if __name__ == "__main__":
-    # TODO : add an option to remove all users with USE permissions before appliying model
     # /api/v2/roles/{id}/users/ List Users for a Role
     sync()
