@@ -7,7 +7,7 @@
 
 ### Overview
 
-This repository provides a tool to easily propagate the "use" permission of the listed instance groups within organizations to administrators or users of the organization. It addresses the need to ensure that the "use" permission for instance groups is managed by dedicated teams. This tool replicates the behavior of "use" permission for organization administrators introduced in AWX, serving as a workaround until the official solution is available.
+This repository provides a tool to easily propagate the "use" permission of the listed instance groups within organizations to administrators or users of the organization. It addresses the need to ensure that the "use" permission for instance groups is managed by dedicated teams. This tool replicates the behavior of "use" permission for organization administrators introduced in AWX (https://github.com/ansible/awx/issues/4292), serving as a workaround until the official solution is available (https://github.com/ansible/awx/issues/14564).
 
 ### Features
 
