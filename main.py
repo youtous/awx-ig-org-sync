@@ -8,7 +8,6 @@ import logging
 import os
 import requests
 import json
-import pandas as pd
 
 logging.basicConfig(level=os.environ.get("LOGLEVEL", "INFO"))
 requests.packages.urllib3.disable_warnings()
