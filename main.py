@@ -366,28 +366,32 @@ def sync(
                 validate_certs=verify_certs,
             )
 
-            org_instance_groups = _controller_get_all_entities(
+            org_allowed_igs = _controller_get_all_entities(
                 entity_name=f"organizations/{org_id}/instance_groups",
                 controller_url=controller_url,
                 controller_headers=controller_headers,
                 validate_certs=verify_certs,
             )
+            org_allowed_team_names = map(
+                lambda ig: f"{team_prefix}{ig['name']}", org_allowed_igs
+            )
 
-            # add role in each instance group
+            # add role in each instance group if listed by the organization
             for team_name, team_object in team_map.items():
-                logging.info(
-                    f"Adding {len(role_users)} {role} from {organization['name']} to team={team_name}"
-                )
+                if team_name in org_allowed_team_names:
+                    logging.info(
+                        f"Adding {len(role_users)} {role} from {organization['name']} to team={team_name}"
+                    )
 
-                if team_name not in allowed_users_per_ig:
-                    allowed_users_per_ig[team_name] = {
-                        "id": team_object["id"],
-                        "users": [],
-                    }
+                    if team_name not in allowed_users_per_ig:
+                        allowed_users_per_ig[team_name] = {
+                            "id": team_object["id"],
+                            "users": [],
+                        }
 
-                allowed_users_per_ig[team_name]["users"].extend(
-                    map(lambda user: user["id"], role_users)
-                )
+                    allowed_users_per_ig[team_name]["users"].extend(
+                        map(lambda user: user["id"], role_users)
+                    )
 
     logging.info("Applying needed changes...")
 
@@ -425,14 +429,14 @@ def sync(
                     f"Removing {team_user['username']}#{team_user['id']} from team={team_name}"
                 )
                 remove_result = _controller_create_entity(
-                    entity_name=f"users/{user_id}/roles",
+                    entity_name=f"users/{team_user['id']}/roles",
                     data={"id": member_role_id, "disassociate": True},
                     controller_url=controller_url,
                     controller_headers=controller_headers,
                     validate_certs=verify_certs,
                 )
                 logging.info(
-                    f"Removing user#{user_id} from team={team_name} result: {remove_result}"
+                    f"Removing user#{team_user['id']} from team={team_name} result: {remove_result}"
                 )
             else:
                 current_user_list_id.add(team_user["id"])
