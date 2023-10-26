@@ -351,8 +351,15 @@ def sync(
         validate_certs=verify_certs,
     )
 
-    role_from_org_to_allow = role_from_org_to_allow.split(",")
+    # init team map
     allowed_users_per_ig = {}
+    for team_name, team_object in team_map.items():
+        allowed_users_per_ig[team_name] = {
+            "id": team_object["id"],
+            "users": [],
+        }
+
+    role_from_org_to_allow = role_from_org_to_allow.split(",")
     for organization in organizations:
         for role in role_from_org_to_allow:
             logging.info(f"Processing role={role} from org={organization}")
@@ -372,8 +379,12 @@ def sync(
                 controller_headers=controller_headers,
                 validate_certs=verify_certs,
             )
-            org_allowed_team_names = map(
-                lambda ig: f"{team_prefix}{ig['name']}", org_allowed_igs
+            org_allowed_team_names = list(
+                map(lambda ig: f"{team_prefix}{ig['name']}", org_allowed_igs)
+            )
+
+            logging.info(
+                f"Processing allowed teams={org_allowed_team_names} from org={organization['name']} (igs={org_allowed_igs})"
             )
 
             # add role in each instance group if listed by the organization
@@ -382,12 +393,6 @@ def sync(
                     logging.info(
                         f"Adding {len(role_users)} {role} from {organization['name']} to team={team_name}"
                     )
-
-                    if team_name not in allowed_users_per_ig:
-                        allowed_users_per_ig[team_name] = {
-                            "id": team_object["id"],
-                            "users": [],
-                        }
 
                     allowed_users_per_ig[team_name]["users"].extend(
                         map(lambda user: user["id"], role_users)
